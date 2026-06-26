@@ -1,79 +1,87 @@
 import { useState } from 'react'
-
-type HoleData = { hole: number; par: number; yards: number }
-
-const FRONT: HoleData[] = [
-  { hole: 1,  par: 4, yards: 380 },
-  { hole: 2,  par: 5, yards: 502 },
-  { hole: 3,  par: 3, yards: 156 },
-  { hole: 4,  par: 4, yards: 325 },
-  { hole: 5,  par: 4, yards: 455 },
-  { hole: 6,  par: 3, yards: 162 },
-  { hole: 7,  par: 4, yards: 430 },
-  { hole: 8,  par: 5, yards: 490 },
-  { hole: 9,  par: 4, yards: 465 },
-]
-
-const BACK: HoleData[] = [
-  { hole: 10, par: 4, yards: 420 },
-  { hole: 11, par: 4, yards: 415 },
-  { hole: 12, par: 3, yards: 155 },
-  { hole: 13, par: 5, yards: 510 },
-  { hole: 14, par: 4, yards: 405 },
-  { hole: 15, par: 5, yards: 530 },
-  { hole: 16, par: 3, yards: 170 },
-  { hole: 17, par: 4, yards: 445 },
-  { hole: 18, par: 4, yards: 435 },
-]
-
-const ALL = [...FRONT, ...BACK]
+import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import api from '../services/api'
+import type { ScorecardHole, ScorecardState } from '../types/course'
 
 type Scores = Record<number, number | null>
 
-function sumPar(holes: HoleData[]) {
+function sumPar(holes: ScorecardHole[]) {
   return holes.reduce((a, h) => a + h.par, 0)
 }
 
-function sumYards(holes: HoleData[]) {
+function sumYards(holes: ScorecardHole[]) {
   return holes.reduce((a, h) => a + h.yards, 0)
 }
 
-function sumScore(holes: HoleData[], scores: Scores) {
+function sumScore(holes: ScorecardHole[], scores: Scores) {
   return holes.reduce((a, h) => {
-    const s = scores[h.hole]
+    const s = scores[h.hole_number]
     return s != null ? a + s : a
   }, 0)
 }
 
-function scoresFilled(holes: HoleData[], scores: Scores) {
-  return holes.some(h => scores[h.hole] != null)
+function hasAnyScore(holes: ScorecardHole[], scores: Scores) {
+  return holes.some(h => scores[h.hole_number] != null)
 }
 
 function ScoreBadge({ score, par }: { score: number | null; par: number }) {
   if (score == null) return <span className="text-gray-300 text-xs">—</span>
   const diff = score - par
   let cls = 'inline-flex items-center justify-center w-7 h-7 text-xs font-bold tabular-nums '
-  if (diff <= -2) cls += 'rounded-full ring-2 ring-yellow-400 text-yellow-700 bg-yellow-50'
+  if (diff <= -2)   cls += 'rounded-full ring-2 ring-yellow-400 text-yellow-700 bg-yellow-50'
   else if (diff === -1) cls += 'rounded-full ring-2 ring-red-500 text-red-700'
-  else if (diff === 0) cls += 'text-gray-700'
-  else if (diff === 1) cls += 'ring-1 ring-gray-400 text-gray-800'
-  else cls += 'ring-2 ring-gray-600 bg-gray-100 text-gray-900'
+  else if (diff === 0)  cls += 'text-gray-700'
+  else if (diff === 1)  cls += 'ring-1 ring-gray-400 text-gray-800'
+  else                  cls += 'ring-2 ring-gray-600 bg-gray-100 text-gray-900'
   return <span className={cls}>{score}</span>
 }
 
 export default function Scorecard() {
-  const [scores, setScores] = useState<Scores>(
-    Object.fromEntries(ALL.map(h => [h.hole, null]))
-  )
+  const { state } = useLocation()
 
-  const frontPar  = sumPar(FRONT)
-  const backPar   = sumPar(BACK)
-  const totalPar  = frontPar + backPar
-  const frontScore = sumScore(FRONT, scores)
-  const backScore  = sumScore(BACK, scores)
+  if (!state?.holes) return <Navigate to="/scorecard" replace />
+
+  const { courseName, tee, courseRating, slopeRating, parTotal, holes } =
+    state as ScorecardState
+
+  const front = holes.slice(0, 9)
+  const back  = holes.slice(9, 18)
+
+  const navigate = useNavigate()
+  const [scores, setScores] = useState<Scores>(
+    Object.fromEntries(holes.map(h => [h.hole_number, null]))
+  )
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+
+  const frontScore = sumScore(front, scores)
+  const backScore  = sumScore(back, scores)
   const totalScore = frontScore + backScore
-  const diff       = totalScore - totalPar
-  const hasScores  = scoresFilled(ALL, scores)
+  const diff       = totalScore - parTotal
+  const anyScore   = hasAnyScore(holes, scores)
+
+  async function handleSave() {
+    const incomplete = holes.some(h => scores[h.hole_number] == null)
+    if (incomplete) { setSaveError('Enter a score for every hole before saving.'); return }
+
+    setSaving(true)
+    setSaveError('')
+    try {
+      await api.post('/api/rounds', {
+        course_name: courseName,
+        total_par: parTotal,
+        course_rating: courseRating,
+        slope_rating: slopeRating,
+        played_at: new Date().toISOString().split('T')[0],
+        holes: holes.map(h => ({ ...h, score: scores[h.hole_number] })),
+      })
+      navigate('/')
+    } catch {
+      setSaveError('Failed to save round. Try again.')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   function handleScore(hole: number, val: string) {
     const n = parseInt(val)
@@ -95,7 +103,7 @@ export default function Scorecard() {
     )
   }
 
-  const thCls = 'py-2 px-2 font-semibold text-xs uppercase tracking-wider'
+  const thCls      = 'py-2 px-2 font-semibold text-xs uppercase tracking-wider'
   const subtotalCls = 'py-2 px-3 bg-course-800 text-white font-bold text-xs'
 
   return (
@@ -103,10 +111,12 @@ export default function Scorecard() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">New Round</h1>
-          <p className="text-sm text-gray-400 mt-1">Sample Course · Par {totalPar} · {sumYards(ALL).toLocaleString()} yds</p>
+          <h1 className="text-2xl font-semibold text-gray-900">{courseName}</h1>
+          <p className="text-sm text-gray-400 mt-1">
+            {tee} Tees · Par {parTotal} · Rating {courseRating} / Slope {slopeRating}
+          </p>
         </div>
-        {hasScores && (
+        {anyScore && (
           <div className="text-right">
             <p className="text-3xl font-bold tabular-nums text-course-700">{totalScore}</p>
             <p className={`text-sm font-semibold mt-0.5 ${diff > 0 ? 'text-gray-500' : 'text-course-600'}`}>
@@ -122,9 +132,9 @@ export default function Scorecard() {
           <thead>
             <tr className="bg-course-900 text-white text-xs">
               <td className={`${thCls} text-left w-16 text-green-300`}>Hole</td>
-              {FRONT.map(h => <td key={h.hole} className={thCls}>{h.hole}</td>)}
+              {front.map(h => <td key={h.hole_number} className={thCls}>{h.hole_number}</td>)}
               <td className={subtotalCls}>OUT</td>
-              {BACK.map(h => <td key={h.hole} className={thCls}>{h.hole}</td>)}
+              {back.map(h => <td key={h.hole_number} className={thCls}>{h.hole_number}</td>)}
               <td className={subtotalCls}>IN</td>
               <td className={subtotalCls}>TOT</td>
             </tr>
@@ -133,59 +143,70 @@ export default function Scorecard() {
             {/* Par */}
             <tr className="border-b border-sand-200 bg-course-100">
               <td className="py-2 px-3 text-left text-xs font-bold text-course-800 uppercase tracking-wider">Par</td>
-              {FRONT.map(h => <td key={h.hole} className="py-2 px-2 text-xs font-semibold text-course-700">{h.par}</td>)}
-              <td className="py-2 px-3 text-xs font-bold text-course-800 bg-course-100">{frontPar}</td>
-              {BACK.map(h => <td key={h.hole} className="py-2 px-2 text-xs font-semibold text-course-700">{h.par}</td>)}
-              <td className="py-2 px-3 text-xs font-bold text-course-800 bg-course-100">{backPar}</td>
-              <td className="py-2 px-3 text-xs font-bold text-course-800 bg-course-100">{totalPar}</td>
+              {front.map(h => <td key={h.hole_number} className="py-2 px-2 text-xs font-semibold text-course-700">{h.par}</td>)}
+              <td className="py-2 px-3 text-xs font-bold text-course-800">{sumPar(front)}</td>
+              {back.map(h => <td key={h.hole_number} className="py-2 px-2 text-xs font-semibold text-course-700">{h.par}</td>)}
+              <td className="py-2 px-3 text-xs font-bold text-course-800">{sumPar(back)}</td>
+              <td className="py-2 px-3 text-xs font-bold text-course-800">{parTotal}</td>
             </tr>
 
             {/* Yards */}
             <tr className="border-b border-sand-200 bg-white">
               <td className="py-2 px-3 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">Yds</td>
-              {FRONT.map(h => <td key={h.hole} className="py-2 px-2 text-xs text-gray-400">{h.yards}</td>)}
-              <td className="py-2 px-3 text-xs font-semibold text-gray-500 bg-sand-50">{sumYards(FRONT).toLocaleString()}</td>
-              {BACK.map(h => <td key={h.hole} className="py-2 px-2 text-xs text-gray-400">{h.yards}</td>)}
-              <td className="py-2 px-3 text-xs font-semibold text-gray-500 bg-sand-50">{sumYards(BACK).toLocaleString()}</td>
-              <td className="py-2 px-3 text-xs font-semibold text-gray-500 bg-sand-50">{sumYards(ALL).toLocaleString()}</td>
+              {front.map(h => <td key={h.hole_number} className="py-2 px-2 text-xs text-gray-400">{h.yards}</td>)}
+              <td className="py-2 px-3 text-xs font-semibold text-gray-500 bg-sand-50">{sumYards(front).toLocaleString()}</td>
+              {back.map(h => <td key={h.hole_number} className="py-2 px-2 text-xs text-gray-400">{h.yards}</td>)}
+              <td className="py-2 px-3 text-xs font-semibold text-gray-500 bg-sand-50">{sumYards(back).toLocaleString()}</td>
+              <td className="py-2 px-3 text-xs font-semibold text-gray-500 bg-sand-50">{sumYards(holes).toLocaleString()}</td>
+            </tr>
+
+            {/* Handicap */}
+            <tr className="border-b border-sand-200 bg-white">
+              <td className="py-2 px-3 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">Hcp</td>
+              {front.map(h => <td key={h.hole_number} className="py-2 px-2 text-xs text-gray-400">{h.handicap}</td>)}
+              <td className="py-2 px-3 bg-sand-50" />
+              {back.map(h => <td key={h.hole_number} className="py-2 px-2 text-xs text-gray-400">{h.handicap}</td>)}
+              <td className="py-2 px-3 bg-sand-50" />
+              <td className="py-2 px-3 bg-sand-50" />
             </tr>
 
             {/* Score input */}
             <tr className="bg-white">
               <td className="py-2 px-3 text-left text-xs font-bold text-gray-900 uppercase tracking-wider">Score</td>
-              {FRONT.map(h => (
-                <td key={h.hole} className="py-1.5 px-1">
-                  <ScoreInput hole={h.hole} par={h.par} />
+              {front.map(h => (
+                <td key={h.hole_number} className="py-1.5 px-1">
+                  <ScoreInput hole={h.hole_number} par={h.par} />
                 </td>
               ))}
               <td className="py-2 px-3 font-bold text-sm text-gray-900 bg-sand-100 tabular-nums">
-                {scoresFilled(FRONT, scores) ? frontScore : '—'}
+                {hasAnyScore(front, scores) ? frontScore : '—'}
               </td>
-              {BACK.map(h => (
-                <td key={h.hole} className="py-1.5 px-1">
-                  <ScoreInput hole={h.hole} par={h.par} />
+              {back.map(h => (
+                <td key={h.hole_number} className="py-1.5 px-1">
+                  <ScoreInput hole={h.hole_number} par={h.par} />
                 </td>
               ))}
               <td className="py-2 px-3 font-bold text-sm text-gray-900 bg-sand-100 tabular-nums">
-                {scoresFilled(BACK, scores) ? backScore : '—'}
+                {hasAnyScore(back, scores) ? backScore : '—'}
               </td>
               <td className="py-2 px-3 font-bold text-sm text-gray-900 bg-sand-100 tabular-nums">
-                {hasScores ? totalScore : '—'}
+                {anyScore ? totalScore : '—'}
               </td>
             </tr>
 
-            {/* Score badge row (visual indicators) */}
+            {/* Badge row */}
             <tr className="bg-sand-50 border-t border-sand-200">
-              <td className="py-2 px-3 text-left text-xs text-gray-400"></td>
-              {ALL.map((h, i) => (
-                <>
-                  {i === 9 && (
-                    <td key="out-badge" className="py-2 px-3 bg-sand-100" />
-                  )}
-                  <td key={h.hole} className="py-2 px-1">
-                    <ScoreBadge score={scores[h.hole]} par={h.par} />
-                  </td>
-                </>
+              <td className="py-2 px-3" />
+              {front.map(h => (
+                <td key={h.hole_number} className="py-2 px-1">
+                  <ScoreBadge score={scores[h.hole_number]} par={h.par} />
+                </td>
+              ))}
+              <td className="py-2 px-3 bg-sand-100" />
+              {back.map(h => (
+                <td key={h.hole_number} className="py-2 px-1">
+                  <ScoreBadge score={scores[h.hole_number]} par={h.par} />
+                </td>
               ))}
               <td className="py-2 px-3 bg-sand-100" />
               <td className="py-2 px-3 bg-sand-100" />
@@ -194,9 +215,18 @@ export default function Scorecard() {
         </table>
       </div>
 
-      {/* Save button */}
-      <button className="w-full bg-course-700 text-white font-semibold py-3 rounded-md hover:bg-course-600 transition-colors text-sm tracking-wide">
-        Save Round
+      {saveError && (
+        <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+          {saveError}
+        </p>
+      )}
+
+      <button
+        onClick={handleSave}
+        disabled={saving}
+        className="w-full bg-course-700 text-white font-semibold py-3 rounded-md hover:bg-course-600 transition-colors text-sm tracking-wide disabled:opacity-50"
+      >
+        {saving ? 'Saving...' : 'Save Round'}
       </button>
     </div>
   )
