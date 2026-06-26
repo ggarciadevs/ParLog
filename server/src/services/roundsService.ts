@@ -54,7 +54,6 @@ export async function getStats(userId: number) {
   const rounds = res.rows;
   if (rounds.length === 0) return { handicap: null, bestToPar: null, roundsPlayed: 0 };
 
-  // USGA handicap differential = (score - course_rating) * 113 / slope_rating
   const differentials = rounds.map(r =>
     ((r.total_score - r.course_rating) * 113) / r.slope_rating
   );
@@ -62,12 +61,72 @@ export async function getStats(userId: number) {
   const take = Math.min(8, Math.max(1, Math.floor(rounds.length / 2)));
   const best = [...differentials].sort((a, b) => a - b).slice(0, take);
   const handicap = (best.reduce((a, b) => a + b, 0) / take) * 0.96;
-
   const bestToPar = Math.min(...rounds.map(r => r.total_score - r.total_par));
 
   return {
     handicap: Math.round(handicap * 10) / 10,
     bestToPar,
     roundsPlayed: rounds.length,
+  };
+}
+
+export async function getRoundById(roundId: number, userId: number) {
+  const res = await pool.query(
+    `SELECT r.id, r.course_name, r.total_par, r.total_score,
+            r.course_rating, r.slope_rating, r.played_at,
+            json_agg(
+              json_build_object(
+                'hole_number', h.hole_number,
+                'par', h.par,
+                'yards', h.yards,
+                'score', h.score
+              ) ORDER BY h.hole_number
+            ) as holes
+     FROM rounds r
+     JOIN hole_scores h ON h.round_id = r.id
+     WHERE r.id = $1 AND r.user_id = $2
+     GROUP BY r.id`,
+    [roundId, userId]
+  );
+  return res.rows[0] ?? null;
+}
+
+export async function getAnalytics(userId: number) {
+  const [trendRes, parRes, bestRes, worstRes] = await Promise.all([
+    pool.query(
+      `SELECT id, course_name, total_score, total_par, played_at
+       FROM rounds WHERE user_id = $1
+       ORDER BY played_at DESC LIMIT 10`,
+      [userId]
+    ),
+    pool.query(
+      `SELECT h.par,
+              ROUND(AVG(h.score)::numeric, 2) as avg_score,
+              COUNT(*) as holes_played
+       FROM hole_scores h
+       JOIN rounds r ON r.id = h.round_id
+       WHERE r.user_id = $1
+       GROUP BY h.par ORDER BY h.par`,
+      [userId]
+    ),
+    pool.query(
+      `SELECT id, course_name, total_score, total_par, played_at
+       FROM rounds WHERE user_id = $1
+       ORDER BY (total_score - total_par) ASC LIMIT 3`,
+      [userId]
+    ),
+    pool.query(
+      `SELECT id, course_name, total_score, total_par, played_at
+       FROM rounds WHERE user_id = $1
+       ORDER BY (total_score - total_par) DESC LIMIT 3`,
+      [userId]
+    ),
+  ]);
+
+  return {
+    trend: [...trendRes.rows].reverse(),
+    parBreakdown: parRes.rows,
+    bestRounds: bestRes.rows,
+    worstRounds: worstRes.rows,
   };
 }

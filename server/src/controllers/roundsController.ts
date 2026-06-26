@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { saveRound, getRounds, getStats } from '../services/roundsService';
+import { saveRound, getRounds, getStats, getRoundById, getAnalytics } from '../services/roundsService';
 
 export async function create(req: Request, res: Response) {
   const userId = req.user!.userId;
@@ -38,6 +38,27 @@ export async function list(req: Request, res: Response) {
 export async function stats(req: Request, res: Response) {
   try {
     const data = await getStats(req.user!.userId);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+}
+
+export async function byId(req: Request, res: Response) {
+  const roundId = parseInt(req.params.id);
+  if (isNaN(roundId)) { res.status(400).json({ error: 'Invalid round id' }); return; }
+  try {
+    const round = await getRoundById(roundId, req.user!.userId);
+    if (!round) { res.status(404).json({ error: 'Round not found' }); return; }
+    res.json({ round });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+}
+
+export async function analytics(req: Request, res: Response) {
+  try {
+    const data = await getAnalytics(req.user!.userId);
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
